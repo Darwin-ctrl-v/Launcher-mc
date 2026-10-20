@@ -458,9 +458,22 @@ async function syncPack(gameDir, inst, onStatus, onLog) {
   onStatus("Descargando archivos de la instalación...");
   let buf;
   try {
-    const res = await fetch(pack.url, { headers, signal: AbortSignal.timeout(60000) });
+    const res = await fetch(pack.url, { headers, signal: AbortSignal.timeout(15 * 60 * 1000) }); // paquetes grandes: hasta 15 min
     if (!res.ok) throw new Error(`el servidor respondió ${res.status}`);
-    buf = Buffer.from(await res.arrayBuffer());
+    // Se lee por partes para poder mostrar el porcentaje mientras baja
+    const total = Number(res.headers.get("content-length")) || 0;
+    const chunks = [];
+    let got = 0;
+    let last = -1;
+    for await (const chunk of res.body) {
+      chunks.push(chunk);
+      got += chunk.length;
+      if (total) {
+        const p = Math.min(100, Math.floor((got * 100) / total));
+        if (p !== last) { last = p; onStatus(`Descargando archivos de la instalación... ${p}%`); }
+      }
+    }
+    buf = Buffer.concat(chunks);
   } catch (e) {
     if (state) {
       onLog(`Paquete de "${inst.name}": no se pudo actualizar (${e.message}); se usan los archivos que ya hay.`);
