@@ -252,12 +252,14 @@ async function resolveMods(slugs, mc, loader) {
   async function add(idOrSlug, esDependencia, specificVersionId) {
     let cleanId = idOrSlug;
     let targetVer = specificVersionId || null;
+    let pinned = false; // true cuando TÚ pides una versión concreta en el Gist
 
-    // Soporte para especificar versión como "sodium@0.6" o "sodium:0.6"
+    // Soporte para especificar versión como "sodium@0.6.0" o "sodium:0.6.0"
     if (!targetVer && typeof idOrSlug === "string" && /[@:]/.test(idOrSlug)) {
       const parts = idOrSlug.split(/[@:]/);
       cleanId = parts[0].trim();
       targetVer = parts[1].trim();
+      pinned = !!targetVer;
     }
 
     // Para Iris en 1.21.1: usar la versión 1.8.14, compatible con la última versión de Sodium 0.8.x
@@ -276,6 +278,10 @@ async function resolveMods(slugs, mc, loader) {
     let v = null;
     if (targetVer) {
       v = versions.find((x) => x.id === targetVer || (x.version_number && x.version_number.includes(targetVer)));
+    }
+    if (!v && pinned) {
+      const disp = versions.slice(0, 8).map((x) => x.version_number).join(", ") || "ninguna";
+      throw new Error(`"${project.title}": no existe la versión "${targetVer}" para ${mc} + ${loader}. Versiones disponibles: ${disp}`);
     }
     if (!v) {
       v = ["release", "beta", "alpha"].map((t) => versions.find((x) => x.version_type === t)).find(Boolean);
@@ -301,7 +307,9 @@ async function resolveMods(slugs, mc, loader) {
     }
   }
 
-  for (const s of slugs) await add(s, false);
+  // Los mods con versión fija van primero: así, si otro mod los necesita como dependencia, se respeta tu versión
+  const fijo = (x) => /[@:]/.test(String(x));
+  for (const s of [...slugs.filter(fijo), ...slugs.filter((x) => !fijo(x))]) await add(s, false);
   return [...found.values()];
 }
 
@@ -578,6 +586,7 @@ module.exports = {
   fetchInstances,
   normalizeInstances,
   fallbackInstances,
+  resolveMods,
   syncMods,
   syncPack,
   extractZip,
