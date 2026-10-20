@@ -12,6 +12,9 @@ module.exports = {
   //   { "instances": [ { "id": "principal", "name": "Principal", "image": "https://...png",
   //                      "minecraft": "1.21.1", "loader": "fabric", "mods": ["sodium", "lithium"] } ] }
   // El formato viejo (["sodium", "lithium"]) sigue funcionando como una sola instalación.
+  // Opcional por instalación: "pack": { "url": "https://...pack.zip", "version": "1", "once": ["options.txt"] }
+  //   un .zip con carpetas/archivos (config, options.txt...) que se copian a la instalación antes de jugar.
+  //   Se vuelve a instalar cuando cambias "version"; lo que pongas en "once" solo se copia si no existe.
   modsUrl: "https://gist.githubusercontent.com/Darwin-ctrl-v/efe67e29582bc129f9bd4fe40b952f41/raw/mods.json",
 
   // Mods por defecto (o de respaldo si no hay conexión a GitHub):

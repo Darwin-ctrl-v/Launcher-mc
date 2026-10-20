@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { execFile } = require("child_process");
 const { Client } = require("minecraft-launcher-core");
 const config = require("./config");
@@ -165,6 +166,27 @@ async function fetchRemoteJSON() {
   return JSON.parse(text.replace(/,\s*([\]}])/g, "$1"));
 }
 
+// Convierte un enlace de página de GitHub (/blob/...) en el enlace directo (raw) del archivo
+function directUrl(url) {
+  const u = String(url || "").trim().replace(/^http:/i, "https:");
+  const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/i.exec(u);
+  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : u;
+}
+
+// "pack": enlace a un .zip con carpetas/archivos que se copian a la carpeta de la instalación (config, options.txt...)
+function normalizePack(p) {
+  if (!p) return null;
+  const obj = typeof p === "string" ? { url: p } : p;
+  if (!obj || typeof obj !== "object" || !obj.url) return null;
+  const url = directUrl(obj.url);
+  if (!/^https:\/\//i.test(url)) return null;
+  return {
+    url,
+    version: obj.version != null ? String(obj.version) : "",
+    once: Array.isArray(obj.once) ? obj.once.map((x) => String(x).replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+$/, "").toLowerCase()).filter(Boolean) : [],
+  };
+}
+
 const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 const cleanMods = (list) => (Array.isArray(list) ? list.map((s) => String(s).trim()).filter(Boolean) : []);
 
@@ -177,6 +199,7 @@ function legacyInstance(mods) {
     minecraft: config.minecraft,
     loader: String(config.loader || "fabric").toLowerCase(),
     java: null,
+    pack: null,
     mods: mods || cleanMods(config.mods),
   };
 }
@@ -194,11 +217,12 @@ function normalizeInstances(data) {
       out.push({
         id,
         name: String(raw.name || id),
-        image: raw.image ? String(raw.image).trim() : "",
+        image: raw.image ? directUrl(raw.image) : "",
         description: raw.description ? String(raw.description) : "",
         minecraft: String(raw.minecraft || config.minecraft),
         loader: String(raw.loader || config.loader || "fabric").toLowerCase(),
         java: Number(raw.java) > 0 ? Number(raw.java) : null,
+        pack: normalizePack(raw.pack),
         mods: cleanMods(raw.mods),
       });
     }
@@ -345,6 +369,124 @@ async function syncMods(gameDir, inst, onStatus, onProgress) {
   );
 }
 
+/* ---------------- Paquete de archivos de la instalación (config, teclas, etc.) ---------------- */
+
+const MAX_PACK_BYTES = 500 * 1024 * 1024;
+
+// Lector de .zip mínimo (sin dependencias): admite archivos "stored" y "deflate"
+function readZip(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("el archivo no es un .zip válido");
+  const total = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const entries = [];
+  for (let n = 0; n < total; n++) {
+    if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) throw new Error("el .zip está dañado");
+    const flags = buf.readUInt16LE(off + 8);
+    const method = buf.readUInt16LE(off + 10);
+    const csize = buf.readUInt32LE(off + 20);
+    const usize = buf.readUInt32LE(off + 24);
+    const nlen = buf.readUInt16LE(off + 28);
+    const elen = buf.readUInt16LE(off + 30);
+    const clen = buf.readUInt16LE(off + 32);
+    const lho = buf.readUInt32LE(off + 42);
+    const name = buf.toString("utf8", off + 46, off + 46 + nlen);
+    entries.push({ name, flags, method, csize, usize, lho });
+    off += 46 + nlen + elen + clen;
+  }
+  return entries;
+}
+
+function zipData(buf, e) {
+  if (e.flags & 1) throw new Error(`"${e.name}" está cifrado`);
+  if (e.csize === 0xffffffff || e.usize === 0xffffffff) throw new Error("zip64 no está soportado");
+  const lho = e.lho;
+  if (buf.readUInt32LE(lho) !== 0x04034b50) throw new Error("el .zip está dañado");
+  const start = lho + 30 + buf.readUInt16LE(lho + 26) + buf.readUInt16LE(lho + 28);
+  const raw = buf.subarray(start, start + e.csize);
+  if (e.method === 0) return raw;
+  if (e.method === 8) return zlib.inflateRawSync(raw, { maxOutputLength: e.usize + 1024 });
+  throw new Error(`"${e.name}" usa una compresión no soportada (${e.method})`);
+}
+
+// Extrae el zip en destDir. Los archivos de "once" solo se copian si todavía no existen.
+function extractZip(buf, destDir, { once = [] } = {}) {
+  const entries = readZip(buf);
+  const base = path.resolve(destDir);
+  const isOnce = (rel) => once.some((o) => rel === o || rel.startsWith(o + "/"));
+  let written = 0, kept = 0, skipped = 0, bytes = 0;
+  const top = new Set();
+
+  for (const e of entries) {
+    const rel = e.name.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+    if (!rel || rel.endsWith("/")) continue; // carpetas: se crean al escribir los archivos
+    if (/^[a-z]:/i.test(rel) || rel.startsWith("/") || rel.split("/").includes("..")) {
+      throw new Error(`el .zip trae una ruta no permitida: "${e.name}"`);
+    }
+    const low = rel.toLowerCase();
+    // la carpeta mods la gestiona la lista de mods (borra los .jar que no estén en ella)
+    if (low.startsWith("mods/") || low.startsWith("__macosx/") || low.endsWith(".ds_store") || low.endsWith("thumbs.db")) { skipped++; continue; }
+
+    bytes += e.usize;
+    if (bytes > MAX_PACK_BYTES) throw new Error("el .zip es demasiado grande (más de 500 MB)");
+
+    const target = path.resolve(base, rel);
+    if (target !== base && !target.startsWith(base + path.sep)) throw new Error(`el .zip trae una ruta no permitida: "${e.name}"`);
+    top.add(rel.split("/")[0]);
+
+    if (isOnce(low) && fs.existsSync(target)) { kept++; continue; }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, zipData(buf, e));
+    written++;
+  }
+  return { written, kept, skipped, top: [...top] };
+}
+
+// Descarga e instala el paquete de la instalación cuando es nuevo o cuando cambias su "version" en el Gist
+async function syncPack(gameDir, inst, onStatus, onLog) {
+  const pack = inst.pack;
+  if (!pack) return;
+  const stateFile = path.join(gameDir, "pack-state.json");
+  const want = pack.version || pack.url;
+  let state = null;
+  try { state = JSON.parse(fs.readFileSync(stateFile, "utf8")); } catch {}
+  if (state && state.url === pack.url && state.version === want) return; // ya está instalado
+
+  onStatus("Descargando archivos de la instalación...");
+  let buf;
+  try {
+    const res = await fetch(pack.url, { headers, signal: AbortSignal.timeout(60000) });
+    if (!res.ok) throw new Error(`el servidor respondió ${res.status}`);
+    buf = Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    if (state) {
+      onLog(`Paquete de "${inst.name}": no se pudo actualizar (${e.message}); se usan los archivos que ya hay.`);
+      return;
+    }
+    throw new Error(`No se pudieron descargar los archivos de "${inst.name}" (${e.message}). Revisa el enlace "pack" del Gist.`);
+  }
+
+  onStatus("Instalando archivos de la instalación...");
+  let info;
+  try {
+    info = extractZip(buf, gameDir, { once: pack.once });
+  } catch (e) {
+    throw new Error(`El paquete de "${inst.name}" no se pudo instalar: ${e.message}`);
+  }
+  fs.mkdirSync(gameDir, { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({ url: pack.url, version: want }));
+  onLog(`Paquete de "${inst.name}": ${info.written} archivos copiados` +
+    (info.kept ? `, ${info.kept} conservados (ya existían)` : "") +
+    (info.skipped ? `, ${info.skipped} ignorados` : "") +
+    ` -> ${info.top.join(", ") || "(vacío)"}`);
+  if (info.top.length === 1 && !["config", "resourcepacks", "shaderpacks", "saves", "defaultconfigs", "kubejs", "datapacks"].includes(info.top[0].toLowerCase()) && !/\.(txt|dat|json|toml|cfg|properties)$/i.test(info.top[0])) {
+    onLog(`Aviso: el .zip tiene una sola carpeta ("${info.top[0]}"). Si es una carpeta de más, comprime su CONTENIDO y no la carpeta.`);
+  }
+}
+
 /* ---------------- Lanzar el juego ---------------- */
 
 // root = carpeta compartida (assets, librerías, versiones); gameDir = carpeta propia de la instalación
@@ -424,6 +566,9 @@ module.exports = {
   normalizeInstances,
   fallbackInstances,
   syncMods,
+  syncPack,
+  extractZip,
+  directUrl,
   readModsManifest,
   fetchProjectInfo,
   launch,

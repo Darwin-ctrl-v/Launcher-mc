@@ -148,17 +148,21 @@ let instancesMem = [];
 
 async function loadInstances() {
   let offline = false;
+  let error = "";
   try {
     instancesMem = await L.fetchInstances();
     try { fs.writeFileSync(instancesFile(), JSON.stringify({ instances: instancesMem })); } catch {}
+    send("log", `Instalaciones: ${instancesMem.length} leídas del Gist (${instancesMem.map((i) => i.id).join(", ")})`);
   } catch (e) {
     offline = true;
+    error = e.message;
     console.warn("No se pudieron leer las instalaciones del Gist:", e.message);
+    send("log", "Instalaciones: no se pudo leer el Gist -> " + e.message);
     let cached = null;
     try { cached = L.normalizeInstances(JSON.parse(fs.readFileSync(instancesFile(), "utf8"))); } catch {}
     instancesMem = cached || L.fallbackInstances();
   }
-  return { instances: instancesMem, offline };
+  return { instances: instancesMem, offline, error };
 }
 
 function pickSelected(list) {
@@ -182,31 +186,42 @@ async function imageDataUrl(url) {
   if (imageCache.has(url)) return imageCache.get(url);
   const file = path.join(imagesDir(), crypto.createHash("sha1").update(url).digest("hex") + ".img");
   let buf = null;
+  let reason = "";
   try {
     const res = await fetch(new URL(url.replace(/^http:/i, "https:")), {
       headers: { "User-Agent": config.userAgent },
       signal: AbortSignal.timeout(10000),
     });
-    if (res.ok) {
+    if (!res.ok) {
+      reason = `el servidor respondió ${res.status} (revisa rama, carpeta y nombre del archivo, y que el repo sea público)`;
+    } else {
       const b = Buffer.from(await res.arrayBuffer());
-      if (b.length <= 4 * 1024 * 1024 && sniffImage(b)) {
+      if (b.length > 4 * 1024 * 1024) reason = "pesa más de 4 MB";
+      else if (!sniffImage(b)) reason = "el enlace no devuelve una imagen (¿es el enlace Raw, que empieza con raw.githubusercontent.com?)";
+      else {
         buf = b;
         try { fs.mkdirSync(imagesDir(), { recursive: true }); fs.writeFileSync(file, b); } catch {}
       }
     }
-  } catch {}
-  if (!buf) { try { buf = fs.readFileSync(file); } catch {} }
+  } catch (e) {
+    reason = e.message;
+  }
+  if (!buf) { try { buf = fs.readFileSync(file); } catch {} } // sin conexión: la copia guardada
   const type = buf && sniffImage(buf);
-  if (!type) return null;
+  if (!type) {
+    send("log", `Imagen no disponible (${url}): ${reason || "no hay copia guardada"}`);
+    return null;
+  }
   const data = `data:${type};base64,` + buf.toString("base64");
   imageCache.set(url, data);
   return data;
 }
 
 ipcMain.handle("instances:list", async () => {
-  const { instances, offline } = await loadInstances();
+  const { instances, offline, error } = await loadInstances();
   return {
     offline,
+    error,
     selected: pickSelected(instances),
     instances: instances.map((i) => ({
       id: i.id, name: i.name, minecraft: i.minecraft, loader: i.loader, description: i.description, hasImage: !!i.image,
@@ -321,6 +336,9 @@ ipcMain.handle("play", async (_e, instId) => {
 
     status("Comprobando mods...");
     await L.syncMods(dir, inst, status, (r) => setPct(18 + r * 22));
+    setPct(38);
+
+    await L.syncPack(dir, inst, status, (line) => send("log", line)); // config, teclas, etc.
     setPct(40);
 
     status("Descargando y preparando Minecraft...");
