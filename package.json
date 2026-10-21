@@ -1,6 +1,6 @@
 {
   "name": "mi-launcher",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Launcher personalizado de Minecraft (Fabric)",
   "author": "Darwin",
   "main": "main.js",
@@ -32,7 +32,7 @@
       "renderer/**/*"
     ],
     "win": {
-      "icon": "renderer/assets/logo.png",
+      "icon": "renderer/assets/icon.ico",
       "target": ["nsis"]
     },
     "nsis": {

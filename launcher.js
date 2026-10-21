@@ -9,9 +9,7 @@ const config = require("./config");
 const MODRINTH = "https://api.modrinth.com/v2";
 const headers = { "User-Agent": config.userAgent };
 
-// La instalación con este id usa la carpeta "game" de siempre,
-// así nadie pierde sus mundos ni los mods que ya tenía descargados.
-const LEGACY_ID = "principal";
+
 
 async function getJSON(url) {
   const res = await fetch(url, { headers });
@@ -190,10 +188,10 @@ function normalizePack(p) {
 const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 const cleanMods = (list) => (Array.isArray(list) ? list.map((s) => String(s).trim()).filter(Boolean) : []);
 
-function legacyInstance(mods) {
+function defaultInstance(mods) {
   return {
-    id: LEGACY_ID,
-    name: "Principal",
+    id: "default",
+    name: (config.branding && config.branding.title) || "Minecraft",
     image: "",
     description: "",
     minecraft: config.minecraft,
@@ -229,7 +227,7 @@ function normalizeInstances(data) {
     if (out.length) return out;
   }
   const list = Array.isArray(data) ? data : data && Array.isArray(data.mods) ? data.mods : null;
-  if (list && list.length) return [legacyInstance(cleanMods(list))];
+  if (list && list.length) return [defaultInstance(cleanMods(list))];
   return null;
 }
 
@@ -240,7 +238,7 @@ async function fetchInstances() {
 }
 
 // Si no hay Gist ni copia guardada: una sola instalación con lo que diga config.js
-const fallbackInstances = () => [legacyInstance()];
+const fallbackInstances = () => [defaultInstance()];
 
 /* ---------------- Mods (Modrinth) ---------------- */
 
@@ -262,10 +260,7 @@ async function resolveMods(slugs, mc, loader) {
       pinned = !!targetVer;
     }
 
-    // Para Iris en 1.21.1: usar la versión 1.8.14, compatible con la última versión de Sodium 0.8.x
-    if (!targetVer && (cleanId === "iris" || cleanId === "YL57xq9U") && mc === "1.21.1") {
-      targetVer = "1.8.14";
-    }
+
 
     const project = await getJSON(`${MODRINTH}/project/${cleanId}`);
     if (found.has(project.id)) {
@@ -357,10 +352,12 @@ async function syncMods(gameDir, inst, onStatus, onProgress) {
     throw e;
   }
 
-  // Borra los .jar que ya no están en la lista (esta carpeta es solo del launcher)
-  const wanted = new Set(list.map((m) => m.name));
-  for (const f of fs.readdirSync(modsDir)) {
-    if (f.endsWith(".jar") && !wanted.has(f)) fs.rmSync(path.join(modsDir, f));
+  // En instalaciones del Gist se limpian los mods viejos; en instalaciones personalizadas se respetan los mods del usuario
+  if (!inst.isCustom) {
+    const wanted = new Set(list.map((m) => m.name));
+    for (const f of fs.readdirSync(modsDir)) {
+      if (f.endsWith(".jar") && !wanted.has(f)) fs.rmSync(path.join(modsDir, f));
+    }
   }
 
   let hechos = 0;
@@ -418,6 +415,37 @@ function zipData(buf, e) {
   if (e.method === 0) return raw;
   if (e.method === 8) return zlib.inflateRawSync(raw, { maxOutputLength: e.usize + 1024 });
   throw new Error(`"${e.name}" usa una compresión no soportada (${e.method})`);
+}
+
+// Lee información de un mod .jar inspeccionando su fabric.mod.json interno
+function readModJar(filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const entries = readZip(buf);
+    const fmj = entries.find((e) => e.name === "fabric.mod.json");
+    if (fmj) {
+      const json = JSON.parse(zipData(buf, fmj).toString("utf8"));
+      let icon = null;
+      if (json.icon) {
+        const iconPath = String(json.icon).replace(/^\.?\//, "");
+        const iconEntry = entries.find((e) => e.name === iconPath || e.name === "assets/" + json.id + "/" + iconPath);
+        if (iconEntry) {
+          const b = zipData(buf, iconEntry);
+          icon = "data:image/png;base64," + b.toString("base64");
+        }
+      }
+      return {
+        id: json.id || path.basename(filePath, ".jar"),
+        title: json.name || json.id || path.basename(filePath, ".jar"),
+        version: json.version || "",
+        description: json.description || "",
+        icon,
+        filename: path.basename(filePath),
+      };
+    }
+  } catch {}
+  const base = path.basename(filePath, ".jar");
+  return { id: base, title: base, version: "", description: "", icon: null, filename: path.basename(filePath) };
 }
 
 // Extrae el zip en destDir. Los archivos de "once" solo se copian si todavía no existen.
@@ -577,7 +605,6 @@ async function fetchProjectInfo(slugs) {
 }
 
 module.exports = {
-  LEGACY_ID,
   loginMicrosoft,
   loginSaved,
   findJava,
@@ -594,4 +621,6 @@ module.exports = {
   readModsManifest,
   fetchProjectInfo,
   launch,
+  readModJar,
+  slugify,
 };

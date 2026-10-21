@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
@@ -7,19 +7,22 @@ const crypto = require("crypto");
 const config = require("./config");
 const L = require("./launcher");
 
+// Configurar que los datos del launcher se guarden en AppData/.LauncherNotx
+app.setPath("userData", path.join(app.getPath("appData"), config.appName));
+
 let win;
 let session = null; // { auth, saved, name }
 let playing = false;
 
-// Carpeta compartida por todas las instalaciones (assets, librerías y versiones de Minecraft)
-const rootDir = () => path.join(app.getPath("appData"), config.appName, "game");
-// Carpeta propia de cada instalación (mods, mundos, opciones). La "principal" sigue usando la carpeta de siempre.
-const instanceDir = (inst) =>
-  inst.id === L.LEGACY_ID ? rootDir() : path.join(app.getPath("appData"), config.appName, "instances", inst.id);
-const instancesFile = () => path.join(app.getPath("userData"), "instances-cache.json");
-const imagesDir = () => path.join(app.getPath("userData"), "instance-images");
-const sessionFile = () => path.join(app.getPath("userData"), "session.bin");
-const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+// Carpeta compartida donde se guardan versiones, assets y librerías de Minecraft (.LauncherNotx)
+const rootDir = () => path.join(app.getPath("appData"), config.appName);
+// Carpeta propia de cada instalación (mods, mundos, opciones)
+const instanceDir = (inst) => path.join(rootDir(), "instances", inst.id);
+const customInstancesFile = () => path.join(rootDir(), "custom-instances.json");
+const instancesFile = () => path.join(rootDir(), "instances-cache.json");
+const imagesDir = () => path.join(rootDir(), "instance-images");
+const sessionFile = () => path.join(rootDir(), "session.bin");
+const settingsFile = () => path.join(rootDir(), "settings.json");
 
 const send = (channel, data) => {
   if (win && !win.isDestroyed()) win.webContents.send(channel, data);
@@ -143,16 +146,34 @@ ipcMain.handle("branding", () => ({
   loader: config.loader,
 }));
 
-/* ---- Instalaciones (las define tu Gist) ---- */
+/* ---- Instalaciones (Gist + Personalizadas locales) ---- */
 let instancesMem = [];
+
+function loadCustomInstances() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(customInstancesFile(), "utf8"));
+    if (Array.isArray(raw)) return raw;
+  } catch {}
+  return [];
+}
+
+function saveCustomInstances(list) {
+  try {
+    fs.mkdirSync(rootDir(), { recursive: true });
+    fs.writeFileSync(customInstancesFile(), JSON.stringify(list, null, 2), "utf8");
+  } catch (e) {
+    console.error("Error guardando instalaciones personalizadas:", e);
+  }
+}
 
 async function loadInstances() {
   let offline = false;
   let error = "";
+  let gistList = [];
   try {
-    instancesMem = await L.fetchInstances();
-    try { fs.writeFileSync(instancesFile(), JSON.stringify({ instances: instancesMem })); } catch {}
-    send("log", `Instalaciones: ${instancesMem.length} leídas del Gist (${instancesMem.map((i) => i.id).join(", ")})`);
+    gistList = await L.fetchInstances();
+    try { fs.writeFileSync(instancesFile(), JSON.stringify({ instances: gistList })); } catch {}
+    send("log", `Instalaciones: ${gistList.length} leídas del Gist (${gistList.map((i) => i.id).join(", ")})`);
   } catch (e) {
     offline = true;
     error = e.message;
@@ -160,14 +181,24 @@ async function loadInstances() {
     send("log", "Instalaciones: no se pudo leer el Gist -> " + e.message);
     let cached = null;
     try { cached = L.normalizeInstances(JSON.parse(fs.readFileSync(instancesFile(), "utf8"))); } catch {}
-    instancesMem = cached || L.fallbackInstances();
+    gistList = cached || [];
+  }
+
+  const customList = loadCustomInstances().map((c) => ({
+    ...c,
+    isCustom: true,
+  }));
+
+  instancesMem = [...gistList, ...customList];
+  if (!instancesMem.length) {
+    instancesMem = L.fallbackInstances();
   }
   return { instances: instancesMem, offline, error };
 }
 
 function pickSelected(list) {
   const saved = loadSettings().instance;
-  return list.some((i) => i.id === saved) ? saved : list[0].id;
+  return list.some((i) => i.id === saved) ? saved : (list[0] ? list[0].id : null);
 }
 
 function sniffImage(buf) {
@@ -224,7 +255,13 @@ ipcMain.handle("instances:list", async () => {
     error,
     selected: pickSelected(instances),
     instances: instances.map((i) => ({
-      id: i.id, name: i.name, minecraft: i.minecraft, loader: i.loader, description: i.description, hasImage: !!i.image,
+      id: i.id,
+      name: i.name,
+      minecraft: i.minecraft,
+      loader: i.loader,
+      description: i.description,
+      hasImage: !!i.image,
+      isCustom: !!i.isCustom,
     })),
   };
 });
@@ -240,32 +277,232 @@ ipcMain.handle("instances:image", async (_e, id) => {
   return inst && inst.image ? imageDataUrl(inst.image) : null;
 });
 
+ipcMain.handle("instances:create", async (_e, data) => {
+  try {
+    const name = String(data.name || "").trim();
+    if (!name) return { ok: false, error: "El nombre no puede estar vacío" };
+    const minecraft = String(data.minecraft || config.minecraft || "1.21.1").trim();
+    const loader = String(data.loader || "fabric").trim().toLowerCase();
+    const description = String(data.description || "").trim();
+
+    const baseId = L.slugify(name) || "inst";
+    let id = baseId;
+    const existing = loadCustomInstances();
+    let counter = 1;
+    while (existing.some((i) => i.id === id) || (instancesMem && instancesMem.some((i) => i.id === id))) {
+      id = `${baseId}-${counter++}`;
+    }
+
+    const newInst = {
+      id,
+      name,
+      minecraft,
+      loader,
+      description,
+      image: "",
+      mods: Array.isArray(data.mods) ? data.mods : [],
+      isCustom: true,
+      created: Date.now(),
+    };
+
+    existing.push(newInst);
+    saveCustomInstances(existing);
+
+    const dir = path.join(rootDir(), "instances", id, "mods");
+    fs.mkdirSync(dir, { recursive: true });
+
+    saveSettings({ instance: id });
+    await loadInstances();
+    return { ok: true, id };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle("instances:delete", async (_e, id) => {
+  try {
+    const existing = loadCustomInstances();
+    const idx = existing.findIndex((i) => i.id === id);
+    if (idx === -1) return { ok: false, error: "No se puede eliminar una instalación del Gist" };
+
+    existing.splice(idx, 1);
+    saveCustomInstances(existing);
+
+    try {
+      const dir = path.join(rootDir(), "instances", id);
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn("No se pudo eliminar la carpeta de la instalación:", e.message);
+    }
+
+    const { instances } = await loadInstances();
+    if (loadSettings().instance === id && instances.length) {
+      saveSettings({ instance: instances[0].id });
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle("instances:openFolder", async (_e, id, subfolder = "") => {
+  const inst = instancesMem.find((i) => i.id === id);
+  if (!inst) return false;
+  const dir = subfolder ? path.join(instanceDir(inst), subfolder) : instanceDir(inst);
+  fs.mkdirSync(dir, { recursive: true });
+  await shell.openPath(dir);
+  return true;
+});
+
+ipcMain.handle("mods:addFiles", async (_e, instId) => {
+  try {
+    const inst = instancesMem.find((i) => i.id === instId);
+    if (!inst) return { ok: false, error: "Instalación no encontrada" };
+
+    const dir = path.join(instanceDir(inst), "mods");
+    fs.mkdirSync(dir, { recursive: true });
+
+    const result = await dialog.showOpenDialog(win, {
+      title: `Subir mods a "${inst.name}"`,
+      filters: [{ name: "Mods de Minecraft (*.jar)", extensions: ["jar"] }],
+      properties: ["openFile", "multiSelections"],
+    });
+
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+
+    let added = 0;
+    for (const src of result.filePaths) {
+      const filename = path.basename(src);
+      const dest = path.join(dir, filename);
+      fs.copyFileSync(src, dest);
+      added++;
+    }
+    return { ok: true, added };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle("mods:deleteFile", async (_e, instId, filename) => {
+  try {
+    const inst = instancesMem.find((i) => i.id === instId);
+    if (!inst) return { ok: false, error: "Instalación no encontrada" };
+
+    const cleanName = path.basename(filename);
+    const target = path.join(instanceDir(inst), "mods", cleanName);
+    if (fs.existsSync(target)) {
+      fs.unlinkSync(target);
+    }
+
+    if (inst.isCustom) {
+      const customs = loadCustomInstances();
+      const cInst = customs.find((c) => c.id === instId);
+      if (cInst && Array.isArray(cInst.mods)) {
+        cInst.mods = cInst.mods.filter((m) => m !== cleanName && m !== cleanName.replace(/\.jar$/i, ""));
+        saveCustomInstances(customs);
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle("mods:list", async (_e, id) => {
   let inst = instancesMem.find((i) => i.id === id);
   if (!inst) {
     await loadInstances();
     inst = instancesMem.find((i) => i.id === id);
   }
-  if (!inst) return { items: [], pending: false };
+  if (!inst) return { items: [], pending: false, isCustom: false };
 
-  const baseSlug = (s) => String(s).split(/[@:]/)[0].trim();
-  const manifest = L.readModsManifest(instanceDir(inst));
-  const items = manifest
-    ? manifest.map((m) => ({ title: m.title, slug: m.slug, version: m.version, lib: m.dependency, icon: m.icon || null }))
-    : inst.mods.map((s) => ({ title: baseSlug(s), slug: baseSlug(s), version: "", lib: false, icon: null }));
+  const dir = instanceDir(inst);
+  const modsDir = path.join(dir, "mods");
+  fs.mkdirSync(modsDir, { recursive: true });
 
-  if (items.some((i) => !i.icon)) {
-    try {
-      const info = await L.fetchProjectInfo(items.map((i) => i.slug));
-      for (const it of items) {
-        const p = info.get(it.slug);
-        if (!p) continue;
-        it.icon = it.icon || p.icon;
-        if (!manifest) it.title = p.title;
-      }
-    } catch { /* sin internet: se muestran sin icono */ }
+  const manifest = L.readModsManifest(dir);
+  const manifestItems = manifest || [];
+
+  // Leer todos los archivos .jar presentes en la carpeta mods
+  let localJars = [];
+  try {
+    localJars = fs.readdirSync(modsDir).filter((f) => f.endsWith(".jar"));
+  } catch {}
+
+  const itemsMap = new Map();
+
+  // 1. Mods del manifest (descargados de Modrinth)
+  for (const m of manifestItems) {
+    itemsMap.set(m.name, {
+      title: m.title,
+      slug: m.slug,
+      version: m.version,
+      lib: m.dependency,
+      icon: m.icon || null,
+      filename: m.name,
+      installed: true,
+      canDelete: true,
+    });
   }
-  return { items, pending: !manifest };
+
+  // 2. Mods físicos de la carpeta mods (subidos a mano o no incluidos en el manifest)
+  for (const jar of localJars) {
+    if (!itemsMap.has(jar)) {
+      const jarInfo = L.readModJar(path.join(modsDir, jar));
+      itemsMap.set(jar, {
+        title: jarInfo.title,
+        slug: jarInfo.id,
+        version: jarInfo.version,
+        lib: false,
+        icon: jarInfo.icon || null,
+        filename: jar,
+        installed: true,
+        canDelete: true,
+        isLocal: true,
+      });
+    }
+  }
+
+  // 3. Si aún no se ha descargado nada y no hay jars en disco, mostrar los mods planificados
+  if (itemsMap.size === 0 && Array.isArray(inst.mods)) {
+    const baseSlug = (s) => String(s).split(/[@:]/)[0].trim();
+    for (const s of inst.mods) {
+      const slug = baseSlug(s);
+      itemsMap.set(slug, {
+        title: slug,
+        slug,
+        version: "",
+        lib: false,
+        icon: null,
+        installed: false,
+        canDelete: !!inst.isCustom,
+      });
+    }
+  }
+
+  const items = Array.from(itemsMap.values());
+
+  // Buscar iconos de Modrinth para los que no tengan icono local
+  const missingIcons = items.filter((i) => !i.icon);
+  if (missingIcons.length > 0) {
+    try {
+      const info = await L.fetchProjectInfo(missingIcons.map((i) => i.slug));
+      for (const it of missingIcons) {
+        const p = info.get(it.slug);
+        if (p) {
+          it.icon = it.icon || p.icon;
+          if (!it.installed) it.title = p.title;
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    items,
+    pending: !manifest && localJars.length === 0,
+    isCustom: !!inst.isCustom,
+    instName: inst.name,
+  };
 });
 
 ipcMain.handle("session:get", async () => {
@@ -507,10 +744,13 @@ ipcMain.handle("cape:set", async (_e, capeId) => {
 
 /* ---- Ventana ---- */
 function createWindow() {
-  // Buscar ícono: primero logo.png (dev), luego build/icon.ico (producción)
+  // Ícono de la aplicación (barra de tareas y ventana): usa icon.ico si existe, sino logo.png
+  const appIco = path.join(__dirname, "renderer", "assets", "icon.ico");
+  const appPng = path.join(__dirname, "renderer", "assets", "app-icon.png");
   const logoPng = path.join(__dirname, "renderer", "assets", "logo.png");
-  const icoPath = path.join(__dirname, "build", "icon.ico");
-  const iconPath = fs.existsSync(logoPng) ? logoPng : (fs.existsSync(icoPath) ? icoPath : undefined);
+  const iconPath = fs.existsSync(appIco)
+    ? appIco
+    : (fs.existsSync(appPng) ? appPng : (fs.existsSync(logoPng) ? logoPng : undefined));
   win = new BrowserWindow({
     width: 980,
     height: 620,

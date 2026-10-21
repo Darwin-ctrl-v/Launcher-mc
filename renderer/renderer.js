@@ -409,6 +409,14 @@ function renderGallery() {
     mc.textContent = inst.minecraft;
 
     card.append(imgBox, name, mc);
+
+    if (inst.isCustom) {
+      const tag = document.createElement("span");
+      tag.className = "tag-custom";
+      tag.textContent = "Personalizada";
+      card.appendChild(tag);
+    }
+
     card.title = inst.description || "";
     card.onclick = () => { viewInstId = inst.id; showView("mods"); };
     grid.appendChild(card);
@@ -454,6 +462,12 @@ function syncUseButton() {
   const using = viewInstId === selectedId;
   $("modsUse").disabled = using;
   $("modsUse").textContent = using ? "En uso" : "Usar esta instalación";
+
+  const inst = instById(viewInstId);
+  const delBtn = $("instDeleteBtn");
+  if (delBtn) {
+    delBtn.hidden = !inst || !inst.isCustom;
+  }
 }
 
 $("modsBack").onclick = () => showView("instances");
@@ -500,6 +514,23 @@ function renderMods() {
     ver.className = "ver";
     ver.textContent = m.version;
     li.append(makeIcon(m), name, ver);
+
+    if (m.canDelete) {
+      const del = document.createElement("button");
+      del.className = "mod-del";
+      del.title = "Eliminar mod";
+      del.textContent = "×";
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (confirm(`¿Eliminar el mod "${m.title}"?`)) {
+          const res = await window.api.deleteModFile(viewInstId, m.filename);
+          if (res.ok) await loadMods();
+          else alert("Error al eliminar: " + (res.error || "desconocido"));
+        }
+      };
+      li.appendChild(del);
+    }
+
     list.appendChild(li);
   }
   if (!rows.length) {
@@ -512,6 +543,112 @@ function renderMods() {
     : "[lib] = librería que otro mod necesita.";
 }
 $("modFilter").addEventListener("input", renderMods);
+
+/* ---------- herramientas de mods ---------- */
+$("modsAddJarBtn").onclick = async () => {
+  if (!viewInstId) return;
+  const res = await window.api.addModFiles(viewInstId);
+  if (res.ok) {
+    await loadMods();
+  } else if (res.error) {
+    alert("Error al subir mods: " + res.error);
+  }
+};
+
+$("modsOpenFolderBtn").onclick = () => {
+  if (!viewInstId) return;
+  window.api.openInstanceFolder(viewInstId, "mods");
+};
+
+$("instDeleteBtn").onclick = async () => {
+  const inst = instById(viewInstId);
+  if (!inst || !inst.isCustom) return;
+  if (!confirm(`¿Eliminar la instalación personalizada "${inst.name}" y todos sus archivos?`)) return;
+
+  const res = await window.api.deleteInstance(viewInstId);
+  if (res.ok) {
+    await refreshInstances();
+    showView("instances");
+  } else {
+    alert("Error al eliminar la instalación: " + (res.error || "desconocido"));
+  }
+};
+
+/* ---------- modal para crear instalación ---------- */
+const createModal = $("createModal");
+const openCreateModal = () => {
+  $("newInstName").value = "";
+  $("newInstVersion").value = "1.21.1";
+  $("newInstCustomVersion").value = "";
+  $("newInstCustomVersion").hidden = true;
+  $("newInstLoader").value = "fabric";
+  $("newInstDesc").value = "";
+  $("createError").hidden = true;
+  $("createError").textContent = "";
+  createModal.hidden = false;
+  $("newInstName").focus();
+};
+const closeCreateModal = () => {
+  createModal.hidden = true;
+};
+
+$("createInstBtn").onclick = openCreateModal;
+$("createCancelBtn").onclick = closeCreateModal;
+$("createCancelX").onclick = closeCreateModal;
+createModal.addEventListener("click", (e) => {
+  if (e.target === createModal) closeCreateModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !createModal.hidden) closeCreateModal();
+});
+
+$("newInstVersion").addEventListener("change", () => {
+  const isCustom = $("newInstVersion").value === "custom";
+  $("newInstCustomVersion").hidden = !isCustom;
+  if (isCustom) $("newInstCustomVersion").focus();
+});
+
+$("createSubmitBtn").onclick = async () => {
+  const errBox = $("createError");
+  errBox.hidden = true;
+  errBox.textContent = "";
+
+  const name = $("newInstName").value.trim();
+  if (!name) {
+    errBox.textContent = "Por favor escribe un nombre para la instalación.";
+    errBox.hidden = false;
+    return;
+  }
+
+  let mc = $("newInstVersion").value;
+  if (mc === "custom") {
+    mc = $("newInstCustomVersion").value.trim();
+    if (!mc) {
+      errBox.textContent = "Por favor especifica la versión de Minecraft.";
+      errBox.hidden = false;
+      return;
+    }
+  }
+
+  const loader = $("newInstLoader").value;
+  const description = $("newInstDesc").value.trim();
+
+  $("createSubmitBtn").disabled = true;
+  const res = await window.api.createInstance({ name, minecraft: mc, loader, description });
+  $("createSubmitBtn").disabled = false;
+
+  if (!res.ok) {
+    errBox.textContent = res.error || "No se pudo crear la instalación.";
+    errBox.hidden = false;
+    return;
+  }
+
+  closeCreateModal();
+  await refreshInstances();
+  viewInstId = res.id;
+  await selectInstance(res.id);
+  showView("mods");
+};
 
 /* ---------- pestaña Opciones ---------- */
 function updateRamUI(mb) {

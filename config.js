@@ -1,7 +1,7 @@
 // Configuración del launcher.
 // Si cambias algo aquí y ya generaste el .exe, hay que volver a generarlo (npm run build).
 module.exports = {
-  appName: "MiLauncher",          // nombre de la carpeta donde se guarda el juego
+  appName: ".LauncherNotx",       // nombre de la carpeta en AppData donde se guardan versiones e instalaciones
   minecraft: "1.21.1",           // solo se usa si el Gist no define instalaciones
   loader: "fabric",
 

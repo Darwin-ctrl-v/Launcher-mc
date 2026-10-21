@@ -82,9 +82,55 @@
         <div class="panel gallery-panel">
           <div class="phead">
             <h2 id="instTitle">INSTALACIONES</h2>
+            <button id="createInstBtn" class="btn primary">+ Nueva instalación</button>
           </div>
           <div id="instGrid" class="instgrid"></div>
           <p id="instHint" class="hint"></p>
+        </div>
+
+        <!-- Modal para crear nueva instalación -->
+        <div id="createModal" class="modal" hidden>
+          <div class="modal-box panel">
+            <div class="phead">
+              <h2>NUEVA INSTALACIÓN</h2>
+              <button id="createCancelX" class="link">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="field">
+                <label for="newInstName">Nombre</label>
+                <input id="newInstName" type="text" placeholder="Ej: Mi Survival, Mods 1.21..." spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="newInstVersion">Versión de Minecraft</label>
+                <select id="newInstVersion">
+                  <option value="1.21.4">1.21.4 (Última versión)</option>
+                  <option value="1.21.1" selected>1.21.1 (Recomendada con mods)</option>
+                  <option value="1.20.4">1.20.4</option>
+                  <option value="1.20.1">1.20.1 (Muy popular para modpacks)</option>
+                  <option value="1.19.4">1.19.4</option>
+                  <option value="1.18.2">1.18.2</option>
+                  <option value="1.16.5">1.16.5</option>
+                  <option value="custom">Otra versión (escribir)...</option>
+                </select>
+                <input id="newInstCustomVersion" type="text" placeholder="Ej: 1.20.2..." spellcheck="false" hidden />
+              </div>
+              <div class="field">
+                <label for="newInstLoader">Mod Loader</label>
+                <select id="newInstLoader">
+                  <option value="fabric" selected>Fabric</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="newInstDesc">Descripción (opcional)</label>
+                <input id="newInstDesc" type="text" placeholder="Notas sobre esta instalación..." spellcheck="false" />
+              </div>
+              <div id="createError" class="hint bad" hidden></div>
+              <div class="modal-actions">
+                <button id="createSubmitBtn" class="btn primary">Crear</button>
+                <button id="createCancelBtn" class="btn">Cancelar</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -97,7 +143,10 @@
           </div>
           <div class="modtools">
             <input id="modFilter" type="text" placeholder="buscar..." spellcheck="false" />
+            <button id="modsAddJarBtn" class="btn primary" title="Elegir archivos .jar para agregarlos a esta instalación">+ Subir mod (.jar)</button>
+            <button id="modsOpenFolderBtn" class="btn" title="Abrir la carpeta mods en el explorador de Windows">📁 Carpeta mods</button>
             <button id="modsUse" class="btn">Usar esta instalación</button>
+            <button id="instDeleteBtn" class="btn btn-danger" title="Eliminar esta instalación personalizada" hidden>🗑 Eliminar</button>
           </div>
           <ul id="modList" class="modlist"></ul>
           <p id="modsHint" class="hint"></p>
