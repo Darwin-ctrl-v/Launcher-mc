@@ -1,6 +1,6 @@
 {
   "name": "mi-launcher",
-  "version": "0.2.9",
+  "version": "0.3.1",
   "description": "Launcher personalizado de Minecraft (Fabric)",
   "author": "Darwin",
   "main": "main.js",
