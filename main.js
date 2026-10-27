@@ -433,12 +433,17 @@ ipcMain.handle("mods:list", async (_e, id) => {
 
   // 1. Mods del manifest (descargados de Modrinth)
   for (const m of manifestItems) {
+    // Mod por enlace (no está en Modrinth): su icono, si lo tiene, está dentro del propio .jar
+    let icon = m.icon || null;
+    if (!icon && !m.slug) {
+      try { icon = L.readModJar(path.join(modsDir, m.name)).icon || null; } catch {}
+    }
     itemsMap.set(m.name, {
       title: m.title,
       slug: m.slug,
       version: m.version,
       lib: m.dependency,
-      icon: m.icon || null,
+      icon,
       filename: m.name,
       installed: true,
       canDelete: true,
@@ -467,6 +472,14 @@ ipcMain.handle("mods:list", async (_e, id) => {
   if (itemsMap.size === 0 && Array.isArray(inst.mods)) {
     const baseSlug = (s) => String(s).split(/[@:]/)[0].trim();
     for (const s of inst.mods) {
+      if (s && typeof s === "object") { // mod por enlace directo
+        const title = s.title || s.name || "Mod externo";
+        itemsMap.set("url:" + s.url, {
+          title, slug: "", version: s.version || "externo", lib: false, icon: null,
+          installed: false, canDelete: !!inst.isCustom,
+        });
+        continue;
+      }
       const slug = baseSlug(s);
       itemsMap.set(slug, {
         title: slug,
@@ -483,7 +496,7 @@ ipcMain.handle("mods:list", async (_e, id) => {
   const items = Array.from(itemsMap.values());
 
   // Buscar iconos de Modrinth para los que no tengan icono local
-  const missingIcons = items.filter((i) => !i.icon);
+  const missingIcons = items.filter((i) => !i.icon && i.slug);
   if (missingIcons.length > 0) {
     try {
       const info = await L.fetchProjectInfo(missingIcons.map((i) => i.slug));

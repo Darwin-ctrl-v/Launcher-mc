@@ -186,7 +186,26 @@ function normalizePack(p) {
 }
 
 const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-const cleanMods = (list) => (Array.isArray(list) ? list.map((s) => String(s).trim()).filter(Boolean) : []);
+// Un mod puede ser un texto de Modrinth ("sodium", "sodium@0.6.0") o un objeto con enlace directo a un .jar
+function nameFromUrl(url) {
+  try { return decodeURIComponent(url.split("?")[0].split("#")[0].split("/").pop() || ""); } catch { return ""; }
+}
+function cleanMod(m) {
+  if (typeof m === "string") return m.trim() || null;
+  if (m && typeof m === "object" && m.url) {
+    const url = directUrl(m.url);
+    const name = String(m.name || nameFromUrl(url)).replace(/[\\/:*?"<>|]/g, "_").trim();
+    return {
+      url,
+      name,
+      title: m.title ? String(m.title) : name.replace(/\.jar$/i, "") || "Mod externo",
+      sha1: m.sha1 ? String(m.sha1).trim().toLowerCase() : "",
+      version: m.version ? String(m.version) : "",
+    };
+  }
+  return null;
+}
+const cleanMods = (list) => (Array.isArray(list) ? list.map(cleanMod).filter(Boolean) : []);
 
 function defaultInstance(mods) {
   return {
@@ -303,8 +322,21 @@ async function resolveMods(slugs, mc, loader) {
   }
 
   // Los mods con versión fija van primero: así, si otro mod los necesita como dependencia, se respeta tu versión
-  const fijo = (x) => /[@:]/.test(String(x));
-  for (const s of [...slugs.filter(fijo), ...slugs.filter((x) => !fijo(x))]) await add(s, false);
+  const textos = slugs.filter((x) => typeof x === "string");
+  const fijo = (x) => /[@:]/.test(x);
+  for (const x of [...textos.filter(fijo), ...textos.filter((y) => !fijo(y))]) await add(x, false);
+
+  // Mods que no están en Modrinth: enlace directo a un .jar (no se les buscan dependencias)
+  for (const m of slugs.filter((x) => x && typeof x === "object")) {
+    if (!/^https:\/\//i.test(m.url)) throw new Error(`El mod con enlace "${m.url}" debe empezar con https://`);
+    if (!/\.jar$/i.test(m.name)) {
+      throw new Error(`El mod "${m.title}" (${m.url}) necesita un nombre de archivo que termine en .jar: agrega "name": "mi-mod.jar" en el Gist`);
+    }
+    found.set("url:" + m.url, {
+      title: m.title, slug: "", icon: null, version: m.version || "externo", dependency: false,
+      name: m.name, url: m.url, sha1: m.sha1 || "",
+    });
+  }
   return [...found.values()];
 }
 
@@ -313,12 +345,21 @@ function sha1File(p) {
 }
 
 async function downloadVerified(url, dest, sha1) {
-  if (fs.existsSync(dest) && sha1File(dest) === sha1) return false; // ya está bien
+  if (fs.existsSync(dest)) {
+    if (!sha1) return false; // enlace sin sha1: se asume que el archivo con ese nombre ya es el correcto
+    if (sha1File(dest) === sha1) return false; // ya está bien
+  }
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`No se pudo descargar ${url} (${res.status})`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const got = crypto.createHash("sha1").update(buf).digest("hex");
-  if (got !== sha1) throw new Error(`El archivo ${path.basename(dest)} llegó corrupto (hash distinto)`);
+  if (buf.length > 300 * 1024 * 1024) throw new Error(`El archivo ${path.basename(dest)} pesa demasiado (más de 300 MB)`);
+  if (buf.length < 4 || buf.readUInt32BE(0) >>> 16 !== 0x504b) {
+    throw new Error(`${url} no devuelve un .jar (¿es el enlace de descarga directa?)`);
+  }
+  if (sha1) {
+    const got = crypto.createHash("sha1").update(buf).digest("hex");
+    if (got !== sha1) throw new Error(`El archivo ${path.basename(dest)} llegó corrupto (hash distinto)`);
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, buf);
   return true;
