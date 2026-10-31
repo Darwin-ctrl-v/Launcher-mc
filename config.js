@@ -34,7 +34,7 @@ module.exports = {
   branding: {
     title: "Launcher Insano",
     subtitle: "El Mejor Launcher xdd",
-    accentColor: "#d4b112",       // color del botón Jugar y de la barra (formato #rrggbb)
+    accentColor: "#ffffff",       // color del botón Jugar y de la barra (formato #rrggbb)
     news: [
       "¡Bienvenidos! Esta es la primera versión del launcher.",
       "Por ahora incluye Sodium. Pronto, más mods.",

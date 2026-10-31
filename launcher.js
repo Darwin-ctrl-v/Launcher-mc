@@ -222,6 +222,26 @@ function defaultInstance(mods) {
 }
 
 // Acepta el formato nuevo ({ "instances": [...] }) y el viejo (["sodium", ...] o { "mods": [...] })
+// Mods que NO están en Modrinth van en su propia lista del Gist:
+//   "externalMods": [ { "title": "Nombre del mod", "url": "https://.../mod.jar" }, { ... } ]
+// (también vale escribirla como "modsExternos"). Se juntan con "mods" al leer la instalación.
+function cleanExternal(raw) {
+  const list = raw.externalMods || raw.modsExternos || raw.external;
+  if (!Array.isArray(list)) return [];
+  return cleanMods(list.map((x) => (typeof x === "string" ? { url: x } : x))); // un texto suelto se toma como enlace
+}
+
+// Junta las dos listas sin repetir el mismo enlace dos veces
+function joinMods(a, b) {
+  const seen = new Set();
+  return [...a, ...b].filter((m) => {
+    if (typeof m !== "object") return true;
+    if (seen.has(m.url)) return false;
+    seen.add(m.url);
+    return true;
+  });
+}
+
 function normalizeInstances(data) {
   if (data && Array.isArray(data.instances)) {
     const seen = new Set();
@@ -240,7 +260,7 @@ function normalizeInstances(data) {
         loader: String(raw.loader || config.loader || "fabric").toLowerCase(),
         java: Number(raw.java) > 0 ? Number(raw.java) : null,
         pack: normalizePack(raw.pack),
-        mods: cleanMods(raw.mods),
+        mods: joinMods(cleanMods(raw.mods), cleanExternal(raw)),
       });
     }
     if (out.length) return out;

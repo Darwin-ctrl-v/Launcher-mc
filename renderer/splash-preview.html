@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Launcher Insano</title>
+  <link rel="stylesheet" href="splash.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0b; color: #d6d6d6; font: 14px "Segoe UI", system-ui, sans-serif; }
+    .fake { height: 100%; display: grid; place-items: center; text-align: center; }
+    .fake button { margin-top: 14px; padding: 9px 18px; background: #1b1b1b; color: #eee; border: 1px solid #333; border-radius: 8px; cursor: pointer; }
+    .fake button:hover { background: #262626; }
+    .app-in { opacity: 0; transform: translateY(8px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.8,.2,1); }
+    .splash-done .app-in { opacity: 1; transform: none; }
+  </style>
+</head>
+<body>
+  <script src="splash.js"></script>
+  <div class="fake"><div class="app-in">
+    Aquí iría la pantalla principal del launcher.<br />
+    <button id="replay">Repetir animación</button>
+  </div></div>
+  <script>
+    document.getElementById("replay").onclick = () => window.splash.play();
+  </script>
+</body>
+</html>

@@ -328,8 +328,9 @@ const loaderName = (l) => (l ? l[0].toUpperCase() + l.slice(1) : "");
 // Actualiza el selector y la línea de versión de debajo del botón JUGAR
 function paintSelected() {
   const inst = instById(selectedId);
-  // Sin caja de nombre: la instalación elegida se ve en la línea de debajo del botón
-  $("meta").textContent = inst ? `${inst.name} · Minecraft ${inst.minecraft} · ${loaderName(inst.loader)}` : "Sin instalaciones";
+  // Nombre grande arriba; debajo del botón, la versión (al jugar se convierte en la barra de progreso)
+  $("heroName").textContent = inst ? inst.name : "Sin instalaciones";
+  $("meta").textContent = inst ? `Minecraft ${inst.minecraft} · ${loaderName(inst.loader)}` : "";
   syncPlayControls();
 }
 
@@ -359,7 +360,7 @@ async function selectInstance(id) {
 }
 
 /* menú del selector (junto al botón JUGAR) */
-function closeVerMenu() { $("verMenu").hidden = true; }
+function closeVerMenu() { $("verMenu").hidden = true; $("verBtn").classList.remove("open"); }
 function toggleVerMenu(e) {
   e.stopPropagation();
   const menu = $("verMenu");
@@ -378,6 +379,7 @@ function toggleVerMenu(e) {
     menu.appendChild(b);
   }
   menu.hidden = false;
+  $("verBtn").classList.add("open");
 }
 $("verBtn").addEventListener("click", toggleVerMenu);
 document.addEventListener("click", (e) => { if (!$("verMenu").hidden && !$("verMenu").contains(e.target)) closeVerMenu(); });
@@ -387,7 +389,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeVerMe
 function renderGallery() {
   const grid = $("instGrid");
   grid.textContent = "";
-  $("instTitle").textContent = `INSTALACIONES (${instances.length})`;
+  $("instTitle").textContent = `Instalaciones · ${instances.length}`;
 
   instances.forEach((inst, idx) => {
     const card = document.createElement("button");
@@ -448,7 +450,7 @@ async function loadMods() {
   modsCache = [];
   $("modList").textContent = "";
   $("modFilter").value = "";
-  $("modsTitle").textContent = `${inst.name} - MODS`;
+  $("modsTitle").textContent = `${inst.name} · Mods`;
   syncUseButton();
 
   const { items, pending: pend } = await window.api.listMods(inst.id);
@@ -498,7 +500,7 @@ function renderMods() {
   const rows = modsCache.filter((m) => m.title.toLowerCase().includes(q));
 
   const inst = instById(viewInstId);
-  $("modsTitle").textContent = `${inst ? inst.name : "Mods"} - MODS (${modsCache.length})`;
+  $("modsTitle").textContent = `${inst ? inst.name + " · " : ""}${modsCache.length} mods`;
   for (const m of rows) {
     const li = document.createElement("li");
     const name = document.createElement("span");
@@ -507,7 +509,7 @@ function renderMods() {
     if (m.lib) {
       const tag = document.createElement("span");
       tag.className = "lib";
-      tag.textContent = "[lib]";
+      tag.textContent = "lib";
       name.appendChild(tag);
     }
     const ver = document.createElement("span");
@@ -540,7 +542,7 @@ function renderMods() {
   }
   $("modsHint").textContent = modsPending
     ? "Estos mods se descargarán la primera vez que juegues con esta instalación."
-    : "[lib] = librería que otro mod necesita.";
+    : "lib = librería que otro mod necesita.";
 }
 $("modFilter").addEventListener("input", renderMods);
 
@@ -655,7 +657,7 @@ function updateRamUI(mb) {
   $("ramValue").textContent = fmtGB(mb);
   $("ramNote").textContent = mb < 2048
     ? "Muy poca memoria: el juego puede ir lento o fallar al cargar."
-    : "Se aplica la próxima vez que pulses JUGAR.";
+    : "Se aplica la próxima vez que pulses Jugar.";
 }
 
 async function loadOptions() {
@@ -725,9 +727,9 @@ function setState(state) {
   if (!idle) closeVerMenu();
   syncPlayControls();
 
-  if (state === "loading") $("loadText").textContent = "CARGANDO";
-  if (state === "launching") { $("loadText").textContent = "LAUNCHING GAME"; setFill(100); }
-  if (state === "running") { $("loadText").textContent = "GAME RUNNING"; setFill(100); }
+  if (state === "loading") $("loadText").textContent = "Cargando";
+  if (state === "launching") { $("loadText").textContent = "Iniciando el juego"; setFill(100); }
+  if (state === "running") { $("loadText").textContent = "Juego en ejecución"; setFill(100); }
   if (idle) setFill(0);
 
   if (window.setBackgroundPaused) window.setBackgroundPaused(state === "running"); // ahorra CPU mientras juegas

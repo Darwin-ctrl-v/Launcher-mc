@@ -1,0 +1,41 @@
+/* Pantalla de carga del launcher (logo animado sobre fondo oscuro) */
+#splash {
+  position: fixed; inset: 0; z-index: 99999;
+  display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 44%, #181818 0%, #0d0d0d 52%, #060606 100%);
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  user-select: none; cursor: default;
+}
+#splash .sp-glow {
+  position: absolute; left: 50%; top: 44%; width: 560px; height: 560px; margin: -280px 0 0 -280px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.04) 38%, transparent 66%);
+  opacity: 0; pointer-events: none;
+}
+#splash .sp-stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: 30px; }
+#splash .sp-logo { width: 208px; height: 208px; opacity: 0; will-change: transform, opacity, filter; }
+#splash .sp-logo svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+/* colores originales del logo (grises), con nombres propios para no chocar con el resto de la interfaz */
+#splash .sp-c1 { fill: #555555; stroke: #555555; stroke-miterlimit: 10; }
+#splash .sp-c2 { fill: #777777; stroke: #000000; stroke-miterlimit: 10; }
+#splash .sp-c3 { fill: #555555; stroke: #000000; stroke-miterlimit: 10; }
+#splash .sp-c4 { fill: #2b2b2b; stroke: #555555; stroke-miterlimit: 10; }
+#splash .sp-c5 { fill: #c3c3c3; stroke: #555555; stroke-miterlimit: 10; }
+#splash .sp-eye-r, #splash .sp-eye-l { transform-box: fill-box; transform-origin: 50% 50%; }
+
+#splash .sp-title {
+  height: 12px; font-size: 12px; line-height: 12px; font-weight: 500; color: #8f8f8f;
+  letter-spacing: 0.42em; text-indent: 0.42em; text-transform: uppercase; white-space: nowrap;
+  opacity: 0;
+}
+#splash .sp-bar { width: 136px; height: 2px; margin-top: -8px; background: #1d1d1d; border-radius: 2px; overflow: hidden; opacity: 0; }
+#splash .sp-bar i { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, #5c5c5c, #ffffff); transform-origin: 0 50%; transform: scaleX(0); }
+
+#splash .sp-particle {
+  position: absolute; left: 0; top: 0; display: block; pointer-events: none; will-change: transform, opacity;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #splash .sp-particle { display: none; }
+}
